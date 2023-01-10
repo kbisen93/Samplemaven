@@ -1,0 +1,235 @@
+#!/usr/bin/env groovy
+
+// ====================================================================================================================
+def RELEASE = "DEV";
+def PROJECT = "SampleMavenProject";
+def JARREF  = "1.1-SNAPSHOT";
+def ARTIFACTJAR1 = "samplemaven-";
+def RELEASE_NO = "DEV";
+def DEPLOYENV = "DEV";
+def SUBDIRECTORY = "/Deployment_Testing";
+def CARA_HOSTNAME_URL = "apvrp34109.uhc.com";
+def CARA_AGENT_URL = "apvrp34109.uhc.com";
+
+// pipeline starts from here... ========================================================================================
+pipeline {
+
+  agent {
+    //label 'APVRD20377'  // agent a linux server
+    label 'brx-kubectl-slave'
+  }
+
+  //  Tools Section starts from here... ================================================================================
+  tools {
+    	  maven 'maven1'
+	  //maven 'MAVEN 3.6.1 on APVRD20377'
+  }
+  // Tools Section ends here... ========================================================================================
+
+
+  // Environment section starts here ===================================================================================
+  environment {
+    GIT_CRED_ID        = 'svc_ms_git'
+    PROJECT            = 'SampleMavenProject'
+    GIT_BRANCH         = 'master'
+    EMAIL              = '''saurabh_srivastava41@optum.com'''
+    imagename           = 'samplemavenproject'
+    registryCredential = 'svc_ms_git'  //'saurabh_dockerHub'
+    imagetype = 'QA'	  
+    dockerImage        = ''
+    //TEST_EMAIL      = 'kshitij_bisen@optum.com'
+  }
+  // == Environment section ends here ==================================================================================
+
+  // This section is related to Jenkins Job ---------------------------------------------
+  options { buildDiscarder logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '', daysToKeepStr: '', numToKeepStr: '3') 
+      timestamps()
+      disableConcurrentBuilds() 
+      skipStagesAfterUnstable()
+  }
+
+  // Stages section starts from here, stage will contain different stage(s) ============================================
+  
+	stages {
+    
+		// First Stage => 1.General Cleanup starts from here ==============================================================
+		stage('1.General Cleanup') {
+			when {
+				equals expected: "SUCCESS", actual: currentBuild.currentResult
+			}
+        steps { echo '''#####################################'''   
+                echo '''########## General Cleanup ##########'''
+                echo '''#####################################'''
+            script {
+                try {
+                    cleanWs()
+                }
+                catch (exc) {
+                    echo 'Cleanup WS failed!'
+                    currentBuild.result = 'UNSTABLE'
+                }
+            }
+        }
+    }  // First Stage => 1.General Cleanup ends here ===================================================================
+
+    //  Second Stage 2. Source Control Management starts from here =====================================================
+    stage('2.Source Control Management') {
+        when {
+            equals expected: "SUCCESS", actual: currentBuild.currentResult
+        }
+        steps { echo '''#########################################'''
+                echo '''########## Source Control Mgmt ##########'''
+                echo '''#########################################'''
+                //echo "currentBuild.currentResult is ${currentBuild.currentResult}"
+            script {
+                try {  
+                    dir ("$PROJECT") {
+                        git branch: "${env.GIT_BRANCH}",
+                                credentialsId: 'f9ec78c4-5932-4c26-9288-a96fe695aaa1',
+                                url: 'https://github.optum.com/ssriva41/Samplemaven.git'
+                    }
+                }
+                catch (exc) {
+                    echo 'Source Mgmt failed!'
+                    currentBuild.result = 'UNSTABLE'
+                }
+            }
+        }
+    } //  Second Stage 2. Source Control Management ends from here =====================================================
+
+   
+		stage('Building docker image') {
+	steps {
+      	    script {
+                try {  
+                    dir ("${WORKSPACE}/${PROJECT}") {
+			    sh '''
+			    docker build -t "${imagename}:${BUILD_NUMBER}" .  
+			    docker image tag "${imagename}:${BUILD_NUMBER}" "docker.repo1.uhc.com/aasampledocker/qa/${imagename}:${BUILD_NUMBER}"
+			    '''
+			    docker.withRegistry('https://docker.repo1.uhc.com', '883055ef-fe79-43e6-9388-30e19f18a6cc') {
+					sh '''
+					docker push "docker.repo1.uhc.com/aasampledocker/qa/${imagename}:${BUILD_NUMBER}"
+					'''   
+			    }
+                    }
+		}
+                catch (exc) {
+			
+                    echo 'docker build failed!'
+                    currentBuild.result = 'UNSTABLE'
+                }
+            }
+	}
+
+          }
+		
+	/*stage ('Build/Publish Docker Image') {
+        steps {
+            step([$class: 'DockerBuilderPublisher', cleanImages: true, 
+                cleanupWithJenkinsJobDelete: true, 
+                cloud: 'BuildSwarm', 
+                dockerFileDirectory: "${env.PROJECT}",
+                pushCredentialsId: '883055ef-fe79-43e6-9388-30e19f18a6cc', 
+                pushOnSuccess: true, 
+		  tagsString: "docker.repo1.uhc.com/rxclaim-atdd/${imagename}:${BUILD_NUMBER}"])
+        }
+    }	*/
+ 
+	  
+  
+	  // Pushing image on hub.docker.com starts from here ====================================================================	 
+      stage('pulling image from uhc.repo') {
+          steps {
+      	    script {
+                try {  
+                    dir ("${WORKSPACE}/${PROJECT}") {
+			    docker.withRegistry('https://docker.repo1.uhc.com', '883055ef-fe79-43e6-9388-30e19f18a6cc') {
+					sh '''
+					docker pull "docker.repo1.uhc.com/aasampledocker/qa/${imagename}:${BUILD_NUMBER}"
+					docker pull "docker.repo1.uhc.com/aasampledocker/qa/${imagename}:latest"
+					docker container run --name saurabh "${imagename}:${BUILD_NUMBER}"
+			  	'''   
+                    	   }
+		    }
+		}
+                catch (exc) {
+                    echo 'Failed while pushing image to docker hub!'
+                    currentBuild.result = 'UNSTABLE'
+                }
+            }
+
+          }
+      }	
+	  
+     // Pushing image on hub.docker.com ends here ===============================================================================
+
+      /*stage('Running container on build image') {
+          steps {
+      	    script {
+                try {  
+                    dir ("${WORKSPACE}/${PROJECT}") {
+			    // docker container run --name saurabh "${registry} :$BUILD_NUMBER"
+			    sh "docker container run --name saurabh $registry:$BUILD_NUMBER" 
+                    }
+		}
+                catch (exc) {
+                    echo 'docker run failed!'
+                    currentBuild.result = 'UNSTABLE'
+                }
+            }
+
+          }
+      } */
+	    
+	  
+//=================================================================================================================================	  
+/*  stage('Run RA Deploy') {
+	when {
+             equals expected: "SUCCESS", actual: currentBuild.currentResult
+       	}
+      steps {
+        script {         
+		try {
+	//Encrypting the CARA-ARTIFACTORY username & password
+	      withCredentials([usernamePassword(credentialsId: '883055ef-fe79-43e6-9388-30e19f18a6cc', passwordVariable: 'PSWD', usernameVariable: 'USERNAME')]) {
+				
+	//Triggering RA Deployment	
+	      runRADeployment addPackage: true, application: 'RXCLAIMBATCHJAVA', artifactVersions: [[artifactDef: 'OS400 JAR', artifactType: 'RxJARFiles', artifactVersion: "${ARTIFACTJAR1}JAR-${DEPLOYENV}-${RELEASE}-${BUILD_NUMBER}", artifactVersionDesc: "${ARTIFACTJAR1}JAR-${DEPLOYENV}-${RELEASE}-${BUILD_NUMBER}", artifactsSource: [httpFilePath: "${ARTIFACTJAR1}${JARREF}.jar", httpPassword: '$PSWD', httpUrl: "https://repo1.uhc.com/artifactory/UHG-Snapshots/com/optum/optummax/${PROJECT}/${RELEASE}/${BUILD_NUMBER}/${ARTIFACTJAR1}${JARREF}.jar", httpUserName: '$USERNAME', sourceType: 'HTTP', svnAllowUnrevisioned: false], retrievalAgents: [agentName: "${CARA_AGENT_URL}", retrieveBy: 'Agents'], storeInRepository: false, validateMD5: false]], build: "${PROJECT},${DEPLOYENV},${RELEASE},${RELEASE_NO},${SUBDIRECTORY},${BUILD_NUMBER},Build", deploymentDesc: "${PROJECT},${DEPLOYENV},${RELEASE},${RELEASE_NO},${SUBDIRECTORY},${BUILD_NUMBER},Build", deploymentName: "${PROJECT},${DEPLOYENV},${RELEASE},${RELEASE_NO},${SUBDIRECTORY},${BUILD_NUMBER},Build", deploymentPlanDesc: "${PROJECT} ${DEPLOYENV} ${RELEASE} ${BUILD_NUMBER} (${DEPLOYENV}-CARA) Build", deploymentPlanName: "${PROJECT} ${DEPLOYENV} ${RELEASE} ${BUILD_NUMBER} (${DEPLOYENV}-CARA) Build", deploymentPlanUsage: 'Create new deployment plan everytime', deploymentProjectName: 'RXCLAIMBATCHJAVA', deploymentStageToRun: 'Full', environments: "RXCBCHJAVA RXDV1 ${DEPLOYENV}", failBuild: false, failedPaused: true, hostName: '', manifestXMLGenerate: false, manifestXMLUpload: false, packageDesc: "${PROJECT} ${DEPLOYENV}-${RELEASE}-${BUILD_NUMBER}", packageName: "${PROJECT} ${DEPLOYENV}-${RELEASE}-${BUILD_NUMBER}", packageXMLGenerate: true, packageXMLUpload: false, port: '8080', pw: '', runAsync: false, showDebug: true, stepParameters: [[parameterName: '', parameterTypes: [parameterType: 'ApplicationType'], parameterValues: [strValue: '', templatePropertyPass: false, templatePropertyStr: false, valueType: 'String'], processName: '', stageName: 'Initialization', stepName: '']], templateCategoryName: 'RXCLAIMBATCHJAVA', templateName: 'RXCLAIMBATCHJAVA QA Deploy', templateProperties: [[propertyName: '', propertyValue: '']], timeout: '-1', updateManifest: false, updateStepParameters: false, updateTemplateProperties: false, uploadManifestXML: '', uploadPackageXML: '', useCentlCrd: true, useSSL: false, user: ''  
+                }         // Ending Credential Block
+	    }             // Ending Try Block                       
+        catch (exc) {
+            echo 'RA Deployment Failed!!'
+            currentBuild.result = 'FAILURE'
+               }        // Ending Catch Block 
+            }           // Ending Script Block
+        }               // Ending Steps Block
+    }                   // Ending Stage Block
+  */  
+//===============================================================================================================================	
+  
+
+}                     //stages 
+  
+  post {
+      success {
+          sendEmail("Successful")
+      }
+      unstable {
+          sendEmail("Unstable")
+      }
+      failure {
+          sendEmail("Failure")
+      }
+  }
+} //pipeline
+
+def sendEmail(status) {
+   emailext (
+   to: "$EMAIL", 
+   mimeType: 'text/html',
+   subject: "Build $BUILD_NUMBER - " + status + " ($JOB_NAME)", 
+   body: '''${JELLY_SCRIPT,template="html"}
+        ${CHANGES, showPaths=true, format="<div><b>%a</b>: %r %p </div> &#8212; &#8220;<em>%m</em>&#8221;</div>", pathFormat="</div>%p"}'''
+   )
+}
